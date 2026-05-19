@@ -548,10 +548,15 @@ function responsesApiToChatCompletions(body) {
   if (body.tools) {
     // Responses API format: {type:"function", name, description, parameters}
     // Chat Completions format: {type:"function", function:{name, description, parameters}}
-    out.tools = body.tools.map(t => {
-      if (t.function) return t; // Already in Chat Completions format
-      return { type: "function", function: { name: t.name, description: t.description, parameters: t.parameters || {} } };
-    });
+    // Built-in tools like web_search, computer_use_preview, code_interpreter have no name
+    // and are not supported by Copilot Chat Completions — filter them out.
+    const converted = body.tools
+      .filter(t => t.type === "function" || t.function || t.name)
+      .map(t => {
+        if (t.function) return t; // Already in Chat Completions format
+        return { type: "function", function: { name: t.name, description: t.description || "", parameters: t.parameters || {} } };
+      });
+    if (converted.length) out.tools = converted;
   }
   return out;
 }
@@ -673,7 +678,9 @@ const proxy = http.createServer(async (req, res) => {
     try { responsesBody = JSON.parse(bodyBuf.toString()); }
     catch (e) { res.writeHead(400); res.end(JSON.stringify({ error: "Invalid JSON" })); return; }
     const isStream = !!responsesBody.stream;
+    dbg(`[Proxy/Responses] incoming tools: ${JSON.stringify(responsesBody.tools)}`);
     const chatBody = responsesApiToChatCompletions(responsesBody);
+    dbg(`[Proxy/Responses] outgoing tools: ${JSON.stringify(chatBody.tools)}`);
     dbg(`[Proxy/Responses] model=${chatBody.model} stream=${isStream}`);
     try {
       const token = await ensureCopilotToken();
