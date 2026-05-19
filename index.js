@@ -504,7 +504,148 @@ async function mapClaudeModel(requested) {
   return CLAUDE_MODEL;
 }
 
-// ─── Codex proxy server (OpenAI passthrough) ──────────────────────────────
+// ─── Responses API ↔ Chat Completions translation ─────────────────────────
+// Codex uses wire_api="responses" which sends POST /v1/responses.
+// Copilot only exposes /v1/chat/completions, so we translate on the fly.
+
+function responsesApiToChatCompletions(body) {
+  const messages = [];
+  if (body.instructions) messages.push({ role: "system", content: body.instructions });
+  const inputItems = typeof body.input === "string"
+    ? [{ role: "user", content: body.input }]
+    : (body.input || []);
+  for (const item of inputItems) {
+    if (item.type === "function_call_output") {
+      messages.push({ role: "tool", tool_call_id: item.call_id, content: String(item.output ?? "") });
+      continue;
+    }
+    if (item.type === "function_call") {
+      messages.push({ role: "assistant", content: null, tool_calls: [{ id: item.call_id || item.id, type: "function", function: { name: item.name, arguments: item.arguments || "{}" } }] });
+      continue;
+    }
+    const role = item.role || "user";
+    const content = item.content;
+    if (typeof content === "string") { messages.push({ role, content }); continue; }
+    if (Array.isArray(content)) {
+      const toolCalls = content.filter(p => p.type === "function_call");
+      const toolResults = content.filter(p => p.type === "function_call_output");
+      if (toolResults.length) { for (const tr of toolResults) messages.push({ role: "tool", tool_call_id: tr.call_id, content: String(tr.output ?? "") }); continue; }
+      if (toolCalls.length) { messages.push({ role: "assistant", content: null, tool_calls: toolCalls.map(tc => ({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments || "{}" } })) }); continue; }
+      const text = content.filter(p => p.type === "input_text" || p.type === "output_text" || p.type === "text").map(p => p.text).join("");
+      messages.push({ role, content: text });
+    }
+  }
+  const out = { model: body.model, messages, stream: !!body.stream };
+  if (body.max_output_tokens) out.max_tokens = body.max_output_tokens;
+  if (body.temperature !== undefined) out.temperature = body.temperature;
+  if (body.top_p !== undefined) out.top_p = body.top_p;
+  if (body.tools) {
+    out.tools = body.tools.map(t => t.type === "function" ? t : { type: "function", function: { name: t.name, description: t.description, parameters: t.parameters || {} } });
+  }
+  return out;
+}
+
+function chatCompletionsToResponsesApi(oai, model) {
+  const choice = (oai.choices || [{}])[0];
+  const msg = choice.message || {};
+  const respId = `resp_${Date.now()}`;
+  const msgId = `msg_${Date.now()}`;
+  const output = [];
+  if (msg.content || !msg.tool_calls) {
+    output.push({ id: msgId, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: msg.content || "" }] });
+  }
+  if (msg.tool_calls) {
+    for (const tc of msg.tool_calls) {
+      output.push({ id: tc.id, type: "function_call", status: "completed", name: tc.function.name, call_id: tc.id, arguments: tc.function.arguments || "{}" });
+    }
+  }
+  return {
+    id: respId, object: "response", created_at: Math.floor(Date.now() / 1000),
+    status: "completed", model, output,
+    usage: { input_tokens: (oai.usage && oai.usage.prompt_tokens) || 0, output_tokens: (oai.usage && oai.usage.completion_tokens) || 0, total_tokens: (oai.usage && oai.usage.total_tokens) || 0 },
+  };
+}
+
+function makeResponsesStreamTranslator(model, write) {
+  const respId = `resp_${Date.now()}`;
+  const msgId = `msg_${Date.now()}`;
+  let started = false, textStarted = false;
+  let fullText = "";
+  let toolItems = {};
+  let inputTokens = 0, outputTokens = 0;
+  let buffer = "";
+  const createdAt = Math.floor(Date.now() / 1000);
+
+  function send(event, data) { write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+
+  function ensureStart() {
+    if (started) return;
+    started = true;
+    send("response.created", { type: "response.created", response: { id: respId, object: "response", created_at: createdAt, status: "in_progress", model, output: [], usage: null } });
+  }
+
+  return {
+    feed(chunk) {
+      buffer += chunk.toString("utf-8");
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        let evt;
+        try { evt = JSON.parse(data); } catch { continue; }
+        ensureStart();
+        const delta = (evt.choices && evt.choices[0] && evt.choices[0].delta) || {};
+        if (evt.usage) { inputTokens = evt.usage.prompt_tokens || inputTokens; outputTokens = evt.usage.completion_tokens || outputTokens; }
+        if (delta.content) {
+          if (!textStarted) {
+            textStarted = true;
+            send("response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { id: msgId, object: "realtime.item", type: "message", status: "in_progress", role: "assistant", content: [] } });
+            send("response.content_part.added", { type: "response.content_part.added", item_id: msgId, output_index: 0, content_index: 0, part: { type: "output_text", text: "" } });
+          }
+          fullText += delta.content;
+          send("response.output_text.delta", { type: "response.output_text.delta", item_id: msgId, output_index: 0, content_index: 0, delta: delta.content });
+        }
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const tcIdx = tc.index !== undefined ? tc.index : 0;
+            const outIdx = (textStarted ? 1 : 0) + tcIdx;
+            if (!toolItems[tcIdx]) {
+              toolItems[tcIdx] = { id: tc.id || `fc_${Date.now()}_${tcIdx}`, name: (tc.function && tc.function.name) || "", argsBuf: "", outIdx };
+              send("response.output_item.added", { type: "response.output_item.added", output_index: outIdx, item: { id: toolItems[tcIdx].id, type: "function_call", status: "in_progress", name: toolItems[tcIdx].name, call_id: toolItems[tcIdx].id, arguments: "" } });
+            }
+            const item = toolItems[tcIdx];
+            if (tc.id) item.id = tc.id;
+            if (tc.function && tc.function.name) item.name = tc.function.name;
+            if (tc.function && tc.function.arguments) {
+              item.argsBuf += tc.function.arguments;
+              send("response.function_call_arguments.delta", { type: "response.function_call_arguments.delta", item_id: item.id, output_index: item.outIdx, delta: tc.function.arguments });
+            }
+          }
+        }
+      }
+    },
+    end() {
+      ensureStart();
+      const outputItems = [];
+      if (textStarted) {
+        send("response.output_text.done", { type: "response.output_text.done", item_id: msgId, output_index: 0, content_index: 0, text: fullText });
+        send("response.content_part.done", { type: "response.content_part.done", item_id: msgId, output_index: 0, content_index: 0, part: { type: "output_text", text: fullText } });
+        send("response.output_item.done", { type: "response.output_item.done", output_index: 0, item: { id: msgId, object: "realtime.item", type: "message", status: "completed", role: "assistant", content: [{ type: "output_text", text: fullText }] } });
+        outputItems.push({ id: msgId, type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: fullText }] });
+      }
+      for (const item of Object.values(toolItems)) {
+        send("response.function_call_arguments.done", { type: "response.function_call_arguments.done", item_id: item.id, output_index: item.outIdx, arguments: item.argsBuf });
+        send("response.output_item.done", { type: "response.output_item.done", output_index: item.outIdx, item: { id: item.id, type: "function_call", status: "completed", name: item.name, call_id: item.id, arguments: item.argsBuf } });
+        outputItems.push({ id: item.id, type: "function_call", status: "completed", name: item.name, call_id: item.id, arguments: item.argsBuf });
+      }
+      send("response.completed", { type: "response.completed", response: { id: respId, object: "response", created_at: createdAt, status: "completed", model, output: outputItems, usage: { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens } } });
+    },
+  };
+}
+
+// ─── Codex proxy server (OpenAI passthrough + Responses API translation) ──
 const proxy = http.createServer(async (req, res) => {
   if (!githubToken || !codexEnabled) {
     res.writeHead(401, { "Content-Type": "application/json" });
@@ -514,6 +655,59 @@ const proxy = http.createServer(async (req, res) => {
   const bodyChunks = [];
   for await (const chunk of req) bodyChunks.push(chunk);
   const bodyBuf = Buffer.concat(bodyChunks);
+
+  // Intercept Responses API calls and translate to Chat Completions
+  if (req.method === "POST" && (req.url === "/v1/responses" || req.url === "/responses")) {
+    let responsesBody;
+    try { responsesBody = JSON.parse(bodyBuf.toString()); }
+    catch (e) { res.writeHead(400); res.end(JSON.stringify({ error: "Invalid JSON" })); return; }
+    const isStream = !!responsesBody.stream;
+    const chatBody = responsesApiToChatCompletions(responsesBody);
+    dbg(`[Proxy/Responses] model=${chatBody.model} stream=${isStream}`);
+    try {
+      const token = await ensureCopilotToken();
+      const upstream = await upstreamHttpsRequest({
+        hostname: COPILOT_API, path: "/v1/chat/completions", method: "POST",
+        headers: {
+          "Content-Type": "application/json", Authorization: `Bearer ${token}`,
+          "Editor-Version": "vscode/1.110.1", "Editor-Plugin-Version": "copilot-chat/0.38.2",
+          "User-Agent": "GitHubCopilotChat/0.38.2", "Copilot-Integration-Id": "vscode-chat",
+          "X-GitHub-Api-Version": "2025-10-01",
+          "Accept": isStream ? "text/event-stream" : "application/json",
+        },
+      }, (upstreamRes) => {
+        dbg(`[Proxy/Responses] upstream status=${upstreamRes.statusCode}`);
+        if (upstreamRes.statusCode !== 200) {
+          const errChunks = [];
+          upstreamRes.on("data", d => errChunks.push(d));
+          upstreamRes.on("end", () => { res.writeHead(upstreamRes.statusCode, { "Content-Type": "application/json" }); res.end(Buffer.concat(errChunks)); });
+          return;
+        }
+        if (isStream) {
+          res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
+          const trans = makeResponsesStreamTranslator(chatBody.model, c => res.write(c));
+          upstreamRes.on("data", d => trans.feed(d));
+          upstreamRes.on("end", () => { trans.end(); res.end(); });
+        } else {
+          const chunks = [];
+          upstreamRes.on("data", d => chunks.push(d));
+          upstreamRes.on("end", () => {
+            let oaiResp;
+            try { oaiResp = JSON.parse(Buffer.concat(chunks).toString()); }
+            catch { res.writeHead(502); res.end(JSON.stringify({ error: "Bad upstream JSON" })); return; }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(chatCompletionsToResponsesApi(oaiResp, chatBody.model)));
+          });
+        }
+      });
+      upstream.on("error", e => { try { res.writeHead(502); res.end(JSON.stringify({ error: e.message })); } catch {} });
+      upstream.write(JSON.stringify(chatBody));
+      upstream.end();
+    } catch (e) { try { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); } catch {} }
+    return;
+  }
+
+  // Default passthrough for all other endpoints
   try {
     const token = await ensureCopilotToken();
     const p = req.url.startsWith("/v1") ? req.url : `/v1${req.url}`;
