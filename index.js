@@ -158,9 +158,26 @@ function getAssetText(name) {
   return fs.readFileSync(path.join(__dirname, "assets", name), "utf-8");
 }
 
+// Resolve version and build hash automatically
+function getBuildInfo() {
+  let version = "unknown";
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
+    version = pkg.version || "unknown";
+  } catch {}
+  let hash = "unknown";
+  try { hash = execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch {}
+  const date = new Date().toISOString().slice(0, 10);
+  return { version, hash, date };
+}
+const BUILD = getBuildInfo();
+
 const HTML = getAssetText("ui.html")
   .replace("{{PROXY_PORT}}", PROXY_PORT)
-  .replace("{{CLAUDE_PORT}}", CLAUDE_PORT);
+  .replace("{{CLAUDE_PORT}}", CLAUDE_PORT)
+  .replace("{{VERSION}}", BUILD.version)
+  .replace("{{BUILD_HASH}}", BUILD.hash)
+  .replace("{{BUILD_DATE}}", BUILD.date);
 
 // ─── Codex config paths ────────────────────────────────────────────────────
 const CODEX_DIR = path.join(process.env.HOME || process.env.USERPROFILE, ".codex");
