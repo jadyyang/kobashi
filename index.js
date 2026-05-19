@@ -546,7 +546,12 @@ function responsesApiToChatCompletions(body) {
   if (body.temperature !== undefined) out.temperature = body.temperature;
   if (body.top_p !== undefined) out.top_p = body.top_p;
   if (body.tools) {
-    out.tools = body.tools.map(t => t.type === "function" ? t : { type: "function", function: { name: t.name, description: t.description, parameters: t.parameters || {} } });
+    // Responses API format: {type:"function", name, description, parameters}
+    // Chat Completions format: {type:"function", function:{name, description, parameters}}
+    out.tools = body.tools.map(t => {
+      if (t.function) return t; // Already in Chat Completions format
+      return { type: "function", function: { name: t.name, description: t.description, parameters: t.parameters || {} } };
+    });
   }
   return out;
 }
