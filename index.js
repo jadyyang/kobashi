@@ -506,7 +506,7 @@ async function mapClaudeModel(requested) {
 
 // ─── Responses API ↔ Chat Completions translation ─────────────────────────
 // Codex uses wire_api="responses" which sends POST /v1/responses.
-// Copilot only exposes /v1/chat/completions, so we translate on the fly.
+// Copilot exposes /chat/completions (no /v1/ prefix), so we translate on the fly.
 
 function responsesApiToChatCompletions(body) {
   const messages = [];
@@ -667,7 +667,7 @@ const proxy = http.createServer(async (req, res) => {
     try {
       const token = await ensureCopilotToken();
       const upstream = await upstreamHttpsRequest({
-        hostname: COPILOT_API, path: "/v1/chat/completions", method: "POST",
+        hostname: COPILOT_API, path: "/chat/completions", method: "POST",
         headers: {
           "Content-Type": "application/json", Authorization: `Bearer ${token}`,
           "Editor-Version": "vscode/1.110.1", "Editor-Plugin-Version": "copilot-chat/0.38.2",
