@@ -545,6 +545,16 @@ function responsesApiToChatCompletions(body) {
   if (body.max_output_tokens) out.max_tokens = body.max_output_tokens;
   if (body.temperature !== undefined) out.temperature = body.temperature;
   if (body.top_p !== undefined) out.top_p = body.top_p;
+  if (body.reasoning) out.reasoning = body.reasoning;
+  if (body.parallel_tool_calls !== undefined) out.parallel_tool_calls = body.parallel_tool_calls;
+  if (body.tool_choice) {
+    const tc = body.tool_choice;
+    if (tc === "auto" || tc === "none" || tc === "required") {
+      out.tool_choice = tc;
+    } else if (tc && tc.type === "function") {
+      out.tool_choice = { type: "function", function: { name: tc.name } };
+    }
+  }
   if (body.tools) {
     // Responses API format: {type:"function", name, description, parameters}
     // Chat Completions format: {type:"function", function:{name, description, parameters}}
@@ -678,10 +688,11 @@ const proxy = http.createServer(async (req, res) => {
     try { responsesBody = JSON.parse(bodyBuf.toString()); }
     catch (e) { res.writeHead(400); res.end(JSON.stringify({ error: "Invalid JSON" })); return; }
     const isStream = !!responsesBody.stream;
+    dbg(`[Proxy/Responses] model=${responsesBody.model} stream=${isStream} msgs=${(responsesBody.input||[]).length} reasoning=${JSON.stringify(responsesBody.reasoning)} tool_choice=${JSON.stringify(responsesBody.tool_choice)}`);
     dbg(`[Proxy/Responses] incoming tools: ${JSON.stringify(responsesBody.tools)}`);
     const chatBody = responsesApiToChatCompletions(responsesBody);
     dbg(`[Proxy/Responses] outgoing tools: ${JSON.stringify(chatBody.tools)}`);
-    dbg(`[Proxy/Responses] model=${chatBody.model} stream=${isStream}`);
+    dbg(`[Proxy/Responses] outgoing body size=${JSON.stringify(chatBody).length} tool_choice=${JSON.stringify(chatBody.tool_choice)} reasoning=${JSON.stringify(chatBody.reasoning)}`);
     try {
       const token = await ensureCopilotToken();
       const upstream = await upstreamHttpsRequest({
@@ -698,7 +709,11 @@ const proxy = http.createServer(async (req, res) => {
         if (upstreamRes.statusCode !== 200) {
           const errChunks = [];
           upstreamRes.on("data", d => errChunks.push(d));
-          upstreamRes.on("end", () => { res.writeHead(upstreamRes.statusCode, { "Content-Type": "application/json" }); res.end(Buffer.concat(errChunks)); });
+          upstreamRes.on("end", () => {
+            const body = Buffer.concat(errChunks);
+            console.error(`[Proxy/Responses] upstream error status=${upstreamRes.statusCode} body=${body.toString("utf-8").slice(0, 500)}`);
+            res.writeHead(upstreamRes.statusCode, { "Content-Type": "application/json" }); res.end(body);
+          });
           return;
         }
         if (isStream) {
