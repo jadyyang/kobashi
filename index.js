@@ -537,26 +537,42 @@ function responsesApiToChatCompletions(body) {
   const inputItems = typeof body.input === "string"
     ? [{ role: "user", content: body.input }]
     : (body.input || []);
-  for (const item of inputItems) {
+  // Use index-based loop so we can group consecutive function_call items.
+  // Chat Completions requires ALL parallel tool calls in ONE assistant message,
+  // followed by one tool message per call_id.
+  let i = 0;
+  while (i < inputItems.length) {
+    const item = inputItems[i];
+
+    // Group consecutive function_call items → single assistant message
+    if (item.type === "function_call") {
+      const toolCalls = [];
+      while (i < inputItems.length && inputItems[i].type === "function_call") {
+        const tc = inputItems[i];
+        toolCalls.push({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments || "{}" } });
+        i++;
+      }
+      messages.push({ role: "assistant", content: null, tool_calls: toolCalls });
+      continue;
+    }
+
     if (item.type === "function_call_output") {
       messages.push({ role: "tool", tool_call_id: item.call_id, content: String(item.output ?? "") });
-      continue;
+      i++; continue;
     }
-    if (item.type === "function_call") {
-      messages.push({ role: "assistant", content: null, tool_calls: [{ id: item.call_id || item.id, type: "function", function: { name: item.name, arguments: item.arguments || "{}" } }] });
-      continue;
-    }
+
     const role = item.role || "user";
     const content = item.content;
-    if (typeof content === "string") { messages.push({ role, content }); continue; }
+    if (typeof content === "string") { messages.push({ role, content }); i++; continue; }
     if (Array.isArray(content)) {
       const toolCalls = content.filter(p => p.type === "function_call");
       const toolResults = content.filter(p => p.type === "function_call_output");
-      if (toolResults.length) { for (const tr of toolResults) messages.push({ role: "tool", tool_call_id: tr.call_id, content: String(tr.output ?? "") }); continue; }
-      if (toolCalls.length) { messages.push({ role: "assistant", content: null, tool_calls: toolCalls.map(tc => ({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments || "{}" } })) }); continue; }
+      if (toolResults.length) { for (const tr of toolResults) messages.push({ role: "tool", tool_call_id: tr.call_id, content: String(tr.output ?? "") }); i++; continue; }
+      if (toolCalls.length) { messages.push({ role: "assistant", content: null, tool_calls: toolCalls.map(tc => ({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments || "{}" } })) }); i++; continue; }
       const text = content.filter(p => p.type === "input_text" || p.type === "output_text" || p.type === "text").map(p => p.text).join("");
       messages.push({ role, content: text });
     }
+    i++;
   }
   const out = { model: body.model, messages, stream: !!body.stream };
   if (body.max_output_tokens) out.max_tokens = body.max_output_tokens;
