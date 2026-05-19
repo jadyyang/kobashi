@@ -133,7 +133,10 @@ async function upstreamHttpsRequest(options, onResponse) {
   }
   dbg(`[Bridge] Routing via system proxy ${proxyUrl.hostname}:${proxyUrl.port}`);
   const socket = await connectViaProxy(proxyUrl, options.hostname, 443);
-  return https.request({ ...options, createConnection: () => socket }, onResponse);
+  // Use http.request (not https) with the already-TLS socket from the CONNECT tunnel.
+  // Using https.request here causes double-TLS or a wrong Host header (github.com:80),
+  // because Node.js doesn't know the socket is already encrypted.
+  return http.request({ ...options, createConnection: () => socket }, onResponse);
 }
 
 // ─── Assets ────────────────────────────────────────────────────────────────
@@ -345,7 +348,14 @@ let username = null, codexEnabled = false, claudeEnabled = false;
 function httpsRequest(options, body) {
   return new Promise(async (resolve, reject) => {
     try {
-      const req = await upstreamHttpsRequest(options, (res) => {
+      // When proxying via CONNECT tunnel we use http.request (socket is already TLS).
+      // http.request defaults to port 80 in the Host header, so we must:
+      //   1. Override Host explicitly
+      //   2. Supply Content-Length to avoid chunked encoding (rejected by some servers)
+      const headers = { ...options.headers };
+      if (!headers.Host && !headers.host) headers.Host = options.hostname;
+      if (body) headers["Content-Length"] = Buffer.byteLength(body);
+      const req = await upstreamHttpsRequest({ ...options, headers }, (res) => {
         const chunks = [];
         res.on("data", c => chunks.push(c));
         res.on("end", () => {

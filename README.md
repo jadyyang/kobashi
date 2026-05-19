@@ -10,6 +10,23 @@ Kobashi is a local bridge that lets [Claude Code](https://www.anthropic.com/clau
   <img src="assets/dark.png?v=2" width="380" alt="Kobashi — dark mode">
 </p>
 
+## 使用说明
+
+**安装**
+
+通过下面的命令 build DMG 安装包，编译的结果就是 `dist/kobashi.dmg` 文件，然后安装即可。
+```bash
+npm run package
+```
+
+**改进**
+
+当前项目是基于原作者（详细参见 [kobashi @ xjin6](https://github.com/xjin6/kobashi)）的项目（基于 *v1.5.2* 版本修改），增加了这些功能：
+1. 增加了编译成 dmg 的功能
+2. 增加了菜单栏，便于日常使用
+
+后面都是原项目的说明，供参考。
+
 ## Download
 
 | Platform | Download | Size |

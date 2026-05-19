@@ -222,6 +222,8 @@ async function startAuth(){
   const r=await fetch('/api/start',{method:'POST'});const d=await r.json();
   document.getElementById('user-code').textContent=d.user_code;
   const l=document.getElementById('verify-link');l.href=d.verification_uri;l.textContent=d.verification_uri;
+  // Auto-open browser to GitHub device auth page so user just needs to paste the code
+  fetch('/api/open-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:d.verification_uri})});
   show('waiting');pollInterval=(d.interval||5)*1000;poll(d.device_code);
 }
 async function poll(dc){

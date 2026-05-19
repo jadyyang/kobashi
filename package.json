@@ -7,6 +7,8 @@
   "scripts": {
     "start": "node index.js",
     "build:mac": "bash scripts/build-mac-app.sh",
+    "build:personal": "bash scripts/build-mac-personal.sh",
+    "package": "bash scripts/build-mac-personal.sh && bash scripts/package-dmg.sh",
     "build:win": "bash scripts/build-win.sh"
   },
   "pkg": {
