@@ -544,7 +544,9 @@ function responsesApiToChatCompletions(body) {
   while (i < inputItems.length) {
     const item = inputItems[i];
 
-    // Group consecutive function_call items → single assistant message
+    // Group consecutive function_call items → single assistant message.
+    // If the previous message is already an assistant message (e.g. has text),
+    // merge tool_calls into it rather than creating a second assistant message.
     if (item.type === "function_call") {
       const toolCalls = [];
       while (i < inputItems.length && inputItems[i].type === "function_call") {
@@ -552,7 +554,12 @@ function responsesApiToChatCompletions(body) {
         toolCalls.push({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments || "{}" } });
         i++;
       }
-      messages.push({ role: "assistant", content: null, tool_calls: toolCalls });
+      const prev = messages[messages.length - 1];
+      if (prev && prev.role === "assistant" && !prev.tool_calls) {
+        prev.tool_calls = toolCalls;
+      } else {
+        messages.push({ role: "assistant", content: null, tool_calls: toolCalls });
+      }
       continue;
     }
 
