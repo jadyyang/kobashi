@@ -134,9 +134,15 @@ async function upstreamHttpsRequest(options, onResponse) {
   dbg(`[Bridge] Routing via system proxy ${proxyUrl.hostname}:${proxyUrl.port}`);
   const socket = await connectViaProxy(proxyUrl, options.hostname, 443);
   // Use http.request (not https) with the already-TLS socket from the CONNECT tunnel.
-  // Using https.request here causes double-TLS or a wrong Host header (github.com:80),
-  // because Node.js doesn't know the socket is already encrypted.
-  return http.request({ ...options, createConnection: () => socket }, onResponse);
+  // Using https.request here causes double-TLS because the socket is already TLS-encrypted.
+  // IMPORTANT: Explicitly set Host header to hostname without port — http.request defaults to
+  // port 80 for plain HTTP and would generate "Host: api.githubcopilot.com:80", causing Copilot
+  // to return a stub "OK" response instead of the actual SSE stream.
+  return http.request({
+    ...options,
+    headers: { ...options.headers, Host: options.hostname },
+    createConnection: () => socket,
+  }, onResponse);
 }
 
 // ─── Assets ────────────────────────────────────────────────────────────────
@@ -686,8 +692,8 @@ const proxy = http.createServer(async (req, res) => {
         if (isStream) {
           res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
           const trans = makeResponsesStreamTranslator(chatBody.model, c => res.write(c));
-          upstreamRes.on("data", d => trans.feed(d));
-          upstreamRes.on("end", () => { trans.end(); res.end(); });
+          upstreamRes.on("data", d => { dbg(`[Proxy/Responses] upstream data chunk (${d.length}b): ${d.toString("utf-8").slice(0, 200)}`); trans.feed(d); });
+          upstreamRes.on("end", () => { dbg("[Proxy/Responses] upstream end"); trans.end(); res.end(); });
         } else {
           const chunks = [];
           upstreamRes.on("data", d => chunks.push(d));
