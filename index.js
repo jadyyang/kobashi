@@ -73,6 +73,7 @@ const PROXY_PORT = 18921;
 const UI_PORT = 18922;
 const CLAUDE_PORT = 18923;
 const CLAUDE_MODEL = "claude-sonnet-4.6";
+const CODEX_MODEL = "gpt-5.4";
 
 // ─── System proxy detection ────────────────────────────────────────────────
 // Detect OS-level HTTP proxy. If present, route upstream Copilot requests
@@ -216,14 +217,16 @@ function writeCodexConfig() {
   if (cur) sections.push(cur);
 
   const cleanTop = topLevel
-    .filter(l => !/^\s*model_provider\s*=/.test(l) && !/^\s*base_url\s*=.*127\.0\.0\.1/.test(l))
+    .filter(l => !/^\s*model_provider\s*=/.test(l) && !/^\s*base_url\s*=.*127\.0\.0\.1/.test(l) && !/^\s*model\s*=/.test(l))
     .join("\n").trim();
   const cleanSections = sections
     .filter(s => !/^\s*\[model_providers\.copilot-bridge\]/.test(s))
     .map(s => s.trim()).join("\n\n");
 
   const out = [
-    `model_provider = "copilot-bridge"`, cleanTop, "",
+    `model_provider = "copilot-bridge"`,
+    `model = "${CODEX_MODEL}"`,
+    cleanTop, "",
     `[model_providers.copilot-bridge]`,
     `name = "Copilot Bridge"`,
     `base_url = "http://127.0.0.1:${PROXY_PORT}/v1"`,
