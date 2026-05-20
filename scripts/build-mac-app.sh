@@ -9,8 +9,23 @@ BINARY="kobashi"
 
 echo "==> Building Node.js binaries..."
 mkdir -p dist
+
+# Inject build stamp into a temp index.js before pkg compiles it
+HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+STAMP_FILE=$(mktemp /tmp/kobashi-index-XXXXXX.js)
+sed "s|const _BUILD = .*; // @BUILD_STAMP|const _BUILD = { v: \"${VERSION}\", h: \"${HASH}\" }; // @BUILD_STAMP|" \
+    index.js > "$STAMP_FILE"
+cp "$STAMP_FILE" index.js.tmp && mv index.js.tmp index.js.build_bak 2>/dev/null; true
+# Temporarily replace index.js for pkg
+cp index.js index.js.orig
+cp "$STAMP_FILE" index.js
+rm "$STAMP_FILE"
+
 pkg . --targets node20-macos-arm64 --output "dist/${BINARY}-node-arm64"
 pkg . --targets node20-macos-x64   --output "dist/${BINARY}-node-x64"
+
+# Restore original index.js
+mv index.js.orig index.js
 
 echo "==> Compiling Swift wrapper..."
 swiftc -framework Cocoa -framework WebKit \
