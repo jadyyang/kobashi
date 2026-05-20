@@ -192,6 +192,50 @@ const HTML = getAssetText("ui.html")
 const CODEX_DIR = path.join(process.env.HOME || process.env.USERPROFILE, ".codex");
 const CODEX_AUTH = path.join(CODEX_DIR, "auth.json");
 const CODEX_CONFIG = path.join(CODEX_DIR, "config.toml");
+const CODEX_SHELL_ENV = path.join(CODEX_DIR, "kobashi-shell.env");
+const ZSHRC = path.join(process.env.HOME || process.env.USERPROFILE, ".zshrc");
+const ZPROFILE = path.join(process.env.HOME || process.env.USERPROFILE, ".zprofile");
+const SHELL_ENV_START = "# >>> kobashi codex env >>>";
+const SHELL_ENV_END = "# <<< kobashi codex env <<<";
+
+function ensureSourceLine(file) {
+  let src = "";
+  try { if (fs.existsSync(file)) src = fs.readFileSync(file, "utf-8"); } catch { return; }
+  if (src.includes(SHELL_ENV_START)) return;
+
+  const block = `${SHELL_ENV_START}\n[ -f \"${CODEX_SHELL_ENV}\" ] && source \"${CODEX_SHELL_ENV}\"\n${SHELL_ENV_END}\n`;
+  const out = src.trimEnd() ? `${src.trimEnd()}\n\n${block}` : block;
+  try { fs.writeFileSync(file, out); } catch {}
+}
+
+function removeSourceLine(file) {
+  if (!fs.existsSync(file)) return;
+  let src = "";
+  try { src = fs.readFileSync(file, "utf-8"); } catch { return; }
+  const escapedStart = SHELL_ENV_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedEnd = SHELL_ENV_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`\n?${escapedStart}[\s\S]*?${escapedEnd}\n?`, "g");
+  const out = src.replace(re, "\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+  try { fs.writeFileSync(file, out ? `${out}\n` : ""); } catch {}
+}
+
+function writeMacShellEnv() {
+  const env = [
+    "# Managed by Kobashi for Codex CLI shells",
+    "export OPENAI_API_KEY=\"PROXY_MANAGED\"",
+    `export OPENAI_BASE_URL=\"http://127.0.0.1:${PROXY_PORT}/v1\"`,
+    "",
+  ].join("\n");
+  try { fs.writeFileSync(CODEX_SHELL_ENV, env); } catch {}
+  ensureSourceLine(ZPROFILE);
+  ensureSourceLine(ZSHRC);
+}
+
+function restoreMacShellEnv() {
+  try { if (fs.existsSync(CODEX_SHELL_ENV)) fs.unlinkSync(CODEX_SHELL_ENV); } catch {}
+  removeSourceLine(ZPROFILE);
+  removeSourceLine(ZSHRC);
+}
 
 function writeCodexConfig() {
   fs.mkdirSync(CODEX_DIR, { recursive: true });
@@ -243,6 +287,7 @@ function writeCodexConfig() {
   } else if (process.platform === "darwin") {
     try { execSync("launchctl setenv OPENAI_API_KEY PROXY_MANAGED", { stdio: "ignore" }); } catch {}
     try { execSync(`launchctl setenv OPENAI_BASE_URL http://127.0.0.1:${PROXY_PORT}/v1`, { stdio: "ignore" }); } catch {}
+    writeMacShellEnv();
   }
   log("[Bridge] Codex config injected");
 }
@@ -259,6 +304,7 @@ function restoreCodexConfig() {
   } else if (process.platform === "darwin") {
     try { execSync("launchctl unsetenv OPENAI_API_KEY", { stdio: "ignore" }); } catch {}
     try { execSync("launchctl unsetenv OPENAI_BASE_URL", { stdio: "ignore" }); } catch {}
+    restoreMacShellEnv();
   }
   log("[Bridge] Codex config restored");
 }

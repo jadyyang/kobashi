@@ -43,7 +43,7 @@ No installation required. No dependencies. Just download and double-click.
 > ```
 > After that, double-click opens it normally — no warning, no trip through System Settings. (Alternative: right-click the app → **Open** → **Open** in the dialog — works but the `xattr` command is faster and sticks.)
 >
-> **After connecting:** open a **new terminal window** before running `codex` or `claude` so the injected env vars are picked up.
+> **After connecting:** open a **new terminal window** before running `codex` or `claude` so the injected env vars are picked up. On macOS, Kobashi also writes a managed `source` block into `~/.zprofile` and `~/.zshrc` so new iTerm2/zsh tabs inherit the Codex bridge env automatically; the block is removed on disconnect.
 
 ## How It Works
 
