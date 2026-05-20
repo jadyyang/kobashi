@@ -11,7 +11,7 @@ const log = (...a) => console.log(...a);
 const dbg = (...a) => { if (DEBUG) console.log(...a); };
 
 // Injected by scripts/sync-app.sh at deploy time. null = dev mode (resolved dynamically).
-const _BUILD = { v: null, h: null }; // @BUILD_STAMP
+const _BUILD = { v: null, h: null, d: null, t: null }; // @BUILD_STAMP
 
 // ─── Browser detection ─────────────────────────────────────────────────────
 function findBrowser() {
@@ -162,11 +162,26 @@ function getAssetText(name) {
   return fs.readFileSync(path.join(__dirname, "assets", name), "utf-8");
 }
 
+
+function resolveGitCommitTimestamp() {
+  try {
+    const iso = execSync("git log -1 --format=%cI", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    if (!iso) return null;
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return null;
+    const pad = (value) => String(value).padStart(2, "0");
+    return {
+      date: iso.slice(0, 10),
+      time: `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`,
+    };
+  } catch {}
+  return null;
+}
 // Resolve version and build hash automatically
 function getBuildInfo() {
   // Use values injected by sync-app.sh at deploy time (production)
-  if (_BUILD.v && _BUILD.h) {
-    return { version: _BUILD.v, hash: _BUILD.h, date: new Date().toISOString().slice(0, 10) };
+  if (_BUILD.v && _BUILD.d && _BUILD.t) {
+    return { version: _BUILD.v, hash: _BUILD.h || "unknown", date: _BUILD.d, time: _BUILD.t };
   }
   // Dev mode: read from package.json + git
   let version = "unknown";
@@ -176,8 +191,13 @@ function getBuildInfo() {
   } catch {}
   let hash = "unknown";
   try { hash = execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch {}
-  const date = new Date().toISOString().slice(0, 10);
-  return { version, hash, date };
+  const commitTime = resolveGitCommitTimestamp();
+  return {
+    version,
+    hash,
+    date: commitTime?.date || "unknown",
+    time: commitTime?.time || "unknown",
+  };
 }
 const BUILD = getBuildInfo();
 
@@ -186,7 +206,8 @@ const HTML = getAssetText("ui.html")
   .replace("{{CLAUDE_PORT}}", CLAUDE_PORT)
   .replace("{{VERSION}}", BUILD.version)
   .replace("{{BUILD_HASH}}", BUILD.hash)
-  .replace("{{BUILD_DATE}}", BUILD.date);
+  .replace("{{BUILD_DATE}}", BUILD.date)
+  .replace("{{BUILD_TIME}}", BUILD.time);
 
 // ─── Codex config paths ────────────────────────────────────────────────────
 const CODEX_DIR = path.join(process.env.HOME || process.env.USERPROFILE, ".codex");

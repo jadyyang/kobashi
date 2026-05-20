@@ -7,6 +7,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var webView: WKWebView!
     var serverProcess: Process?
+    var isMenuBarOnly = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -49,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = false
+        window.delegate = self
 
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
@@ -67,6 +69,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func setMenuBarOnly(_ enabled: Bool) {
+        guard isMenuBarOnly != enabled else { return }
+        isMenuBarOnly = enabled
+        NSApp.setActivationPolicy(enabled ? .accessory : .regular)
     }
 
     func pollAndLoad(attempt: Int = 0) {
@@ -99,6 +107,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         serverProcess?.terminate()
+    }
+}
+
+extension AppDelegate: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        setMenuBarOnly(true)
+        return false
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        setMenuBarOnly(false)
     }
 }
 

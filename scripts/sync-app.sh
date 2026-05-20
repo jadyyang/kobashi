@@ -7,13 +7,20 @@ cd "$(dirname "$0")/.."
 
 VERSION=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
 HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-DATE=$(date +%Y-%m-%d)
+COMMIT_ISO=$(git log -1 --format=%cI 2>/dev/null || echo "")
+if [ -n "$COMMIT_ISO" ]; then
+  DATE=${COMMIT_ISO:0:10}
+  TIME=$(python3 -c "from datetime import datetime; print(datetime.fromisoformat('${COMMIT_ISO}').strftime('%H%M%S'))")
+else
+  DATE="unknown"
+  TIME="unknown"
+fi
 
-echo "==> Deploying v${VERSION} (${HASH}) ${DATE}"
+echo "==> Deploying v${VERSION} (${HASH}) ${DATE} ${TIME}"
 
 # Inject build stamp into a temp copy of index.js
 TMPFILE=$(mktemp /tmp/kobashi-index-XXXXXX.js)
-sed "s|const _BUILD = .*; // @BUILD_STAMP|const _BUILD = { v: \"${VERSION}\", h: \"${HASH}\" }; // @BUILD_STAMP|" index.js > "$TMPFILE"
+sed "s|const _BUILD = .*; // @BUILD_STAMP|const _BUILD = { v: \"${VERSION}\", h: \"${HASH}\", d: \"${DATE}\", t: \"${TIME}\" }; // @BUILD_STAMP|" index.js > \"$TMPFILE\"
 
 # Deploy targets
 TARGETS=(

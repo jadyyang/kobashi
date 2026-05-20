@@ -62,7 +62,15 @@ chmod +x "${APP}/Contents/Resources/bin/node"
 # Inject build stamp into index.js before copying
 VERSION_JS=$(python3 -c "import json; print(json.load(open('package.json'))['version'])" 2>/dev/null || echo "${VERSION}")
 HASH_JS=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-sed "s|const _BUILD = .*; // @BUILD_STAMP|const _BUILD = { v: \"${VERSION_JS}\", h: \"${HASH_JS}\" }; // @BUILD_STAMP|" \
+COMMIT_ISO=$(git log -1 --format=%cI 2>/dev/null || echo "")
+if [ -n "$COMMIT_ISO" ]; then
+  DATE_JS=${COMMIT_ISO:0:10}
+  TIME_JS=$(python3 -c "from datetime import datetime; print(datetime.fromisoformat('${COMMIT_ISO}').strftime('%H%M%S'))")
+else
+  DATE_JS="unknown"
+  TIME_JS="unknown"
+fi
+sed "s|const _BUILD = .*; // @BUILD_STAMP|const _BUILD = { v: \"${VERSION_JS}\", h: \"${HASH_JS}\", d: \"${DATE_JS}\", t: \"${TIME_JS}\" }; // @BUILD_STAMP|" \
     index.js > "${APP}/Contents/Resources/index.js"
 cp -r assets  "${APP}/Contents/Resources/assets"
 
