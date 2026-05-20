@@ -59,7 +59,11 @@ cp "${NODE_BIN}" "${APP}/Contents/Resources/bin/node"
 chmod +x "${APP}/Contents/Resources/bin/node"
 
 # Copy Node.js source files into Resources/
-cp index.js "${APP}/Contents/Resources/index.js"
+# Inject build stamp into index.js before copying
+VERSION_JS=$(python3 -c "import json; print(json.load(open('package.json'))['version'])" 2>/dev/null || echo "${VERSION}")
+HASH_JS=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+sed "s|const _BUILD = .*; // @BUILD_STAMP|const _BUILD = { v: \"${VERSION_JS}\", h: \"${HASH_JS}\" }; // @BUILD_STAMP|" \
+    index.js > "${APP}/Contents/Resources/index.js"
 cp -r assets  "${APP}/Contents/Resources/assets"
 
 cp "dist/AppIcon.icns" "${APP}/Contents/Resources/AppIcon.icns"
