@@ -10,6 +10,13 @@ const DEBUG = process.argv.includes("--debug");
 const log = (...a) => console.log(...a);
 const dbg = (...a) => { if (DEBUG) console.log(...a); };
 
+// Injected at deploy time by scripts/deploy.sh — do not edit manually.
+const KOBASHI_VERSION = "dev"; // @version
+const KOBASHI_HASH = "dev";    // @hash
+
+// Injected by scripts/sync-app.sh at deploy time. null = dev mode (resolved dynamically).
+const _BUILD = { v: null, h: null }; // @BUILD_STAMP
+
 // ─── Browser detection ─────────────────────────────────────────────────────
 function findBrowser() {
   if (process.platform === "darwin") {
@@ -160,6 +167,11 @@ function getAssetText(name) {
 
 // Resolve version and build hash automatically
 function getBuildInfo() {
+  // Use values injected by sync-app.sh at deploy time (production)
+  if (_BUILD.v && _BUILD.h) {
+    return { version: _BUILD.v, hash: _BUILD.h, date: new Date().toISOString().slice(0, 10) };
+  }
+  // Dev mode: read from package.json + git
   let version = "unknown";
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf-8"));
