@@ -609,6 +609,24 @@ async function mapClaudeModel(requested) {
 // Codex uses wire_api="responses" which sends POST /v1/responses.
 // Copilot exposes /chat/completions (no /v1/ prefix), so we translate on the fly.
 
+function normalizeToolArguments(args) {
+  if (typeof args === "string") return args;
+  if (args == null) return "{}";
+  return JSON.stringify(args);
+}
+
+function normalizeToolDefinition(tool) {
+  if (tool.function) return tool;
+  if (tool.type && tool.type !== "function") return null;
+  const name = tool.name;
+  if (!name) return null;
+  const fn = { name, description: tool.description ?? null, parameters: tool.parameters || {} };
+  if (tool.strict !== undefined) {
+    fn.strict = tool.strict;
+  }
+  return { type: "function", function: fn };
+}
+
 function responsesApiToChatCompletions(body) {
   const messages = [];
   if (body.instructions) messages.push({ role: "system", content: body.instructions });
@@ -629,7 +647,7 @@ function responsesApiToChatCompletions(body) {
       const toolCalls = [];
       while (i < inputItems.length && inputItems[i].type === "function_call") {
         const tc = inputItems[i];
-        toolCalls.push({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments || "{}" } });
+        toolCalls.push({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: normalizeToolArguments(tc.arguments) } });
         i++;
       }
       const prev = messages[messages.length - 1];
@@ -653,7 +671,10 @@ function responsesApiToChatCompletions(body) {
       const toolCalls = content.filter(p => p.type === "function_call");
       const toolResults = content.filter(p => p.type === "function_call_output");
       if (toolResults.length) { for (const tr of toolResults) messages.push({ role: "tool", tool_call_id: tr.call_id, content: String(tr.output ?? "") }); i++; continue; }
-      if (toolCalls.length) { messages.push({ role: "assistant", content: null, tool_calls: toolCalls.map(tc => ({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments || "{}" } })) }); i++; continue; }
+      if (toolCalls.length) {
+        messages.push({ role: "assistant", content: null, tool_calls: toolCalls.map(tc => ({ id: tc.call_id || tc.id, type: "function", function: { name: tc.name, arguments: normalizeToolArguments(tc.arguments) } })) });
+        i++; continue;
+      }
       const text = content.filter(p => p.type === "input_text" || p.type === "output_text" || p.type === "text").map(p => p.text).join("");
       messages.push({ role, content: text });
     }
@@ -674,16 +695,12 @@ function responsesApiToChatCompletions(body) {
     }
   }
   if (body.tools) {
-    // Responses API format: {type:"function", name, description, parameters}
-    // Chat Completions format: {type:"function", function:{name, description, parameters}}
     // Built-in tools like web_search, computer_use_preview, code_interpreter have no name
     // and are not supported by Copilot Chat Completions — filter them out.
     const converted = body.tools
       .filter(t => t.type === "function" || t.function || t.name)
-      .map(t => {
-        if (t.function) return t; // Already in Chat Completions format
-        return { type: "function", function: { name: t.name, description: t.description || "", parameters: t.parameters || {} } };
-      });
+      .map(normalizeToolDefinition)
+      .filter(Boolean);
     if (converted.length) out.tools = converted;
   }
   return out;

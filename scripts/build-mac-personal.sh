@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="Kobashi"
 BUNDLE_ID="com.xjin6.kobashi"
-VERSION="1.5.2"
+VERSION="1.5.3"
 BINARY="kobashi"
 
 # Find node binary on the build machine
